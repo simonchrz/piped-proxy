@@ -101,8 +101,24 @@ static RE_DASH_MANIFEST: Lazy<Regex> =
     Lazy::new(|| Regex::new("BaseURL>(https://[^<]+)</BaseURL").unwrap());
 
 static CLIENT: Lazy<Client> = Lazy::new(|| {
+    // HTTP/2 + connection-reuse tuning:
+    //  - http2_keep_alive_interval: PING-frames alle 30s halten die
+    //    connection am Leben sodass googlevideo nicht idle-disconnected
+    //    (= spart TLS-handshake bei jedem zweiten byte-range-fetch).
+    //  - pool_max_idle_per_host=64: default ist 32; bei synth-hls werden
+    //    audio + video parallel gefetcht plus DASH-segments, kann saturieren.
+    //  - tcp_keepalive: TCP-level keepalive damit NAT-Tabellen entries
+    //    nicht expirieren mid-stream.
+    use std::time::Duration;
     let builder = Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; rv:102.0) Gecko/20100101 Firefox/102.0");
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; rv:102.0) Gecko/20100101 Firefox/102.0")
+        .http2_keep_alive_interval(Duration::from_secs(30))
+        .http2_keep_alive_timeout(Duration::from_secs(10))
+        .http2_keep_alive_while_idle(true)
+        .pool_max_idle_per_host(64)
+        .pool_idle_timeout(Duration::from_secs(90))
+        .tcp_keepalive(Duration::from_secs(60))
+        .tcp_nodelay(true);
 
     let proxy = if let Ok(proxy) = env::var("PROXY") {
         reqwest::Proxy::all(proxy).ok()
