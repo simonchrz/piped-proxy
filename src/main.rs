@@ -147,6 +147,29 @@ static CLIENT: Lazy<Client> = Lazy::new(|| {
     .unwrap()
 });
 
+// Optional HTTP/3 (QUIC) client for googlevideo segment fetches, enabled by
+// PROXY_HTTP3=1. prior-knowledge h3 (no Alt-Svc, no in-client fallback) -- the
+// h3->h2 fallback is done per request below. Pattern mirrors the reqwest4j
+// fork. Disabled when an HTTP proxy is set (QUIC can't tunnel through CONNECT).
+static HTTP3_ON: Lazy<bool> =
+    Lazy::new(|| utils::get_env_bool("PROXY_HTTP3") && env::var("PROXY").is_err());
+
+static H3_CLIENT: Lazy<Client> = Lazy::new(|| {
+    use std::time::Duration;
+    let builder = Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; rv:102.0) Gecko/20100101 Firefox/102.0")
+        .http3_prior_knowledge()
+        // short connect timeout so a blocked UDP path fails over to h2 fast
+        .connect_timeout(Duration::from_secs(3));
+    if utils::get_env_bool("IPV4_ONLY") {
+        builder.local_address("0.0.0.0".parse().ok())
+    } else {
+        builder
+    }
+    .build()
+    .unwrap()
+});
+
 const ANDROID_USER_AGENT: &str = "com.google.android.youtube/1537338816 (Linux; U; Android 13; en_US; ; Build/TQ2A.230505.002; Cronet/113.0.5672.24)";
 const ALLOWED_DOMAINS: [&str; 8] = [
     "youtube.com",
@@ -491,7 +514,27 @@ async fn index(req: HttpRequest) -> Result<HttpResponse, Box<dyn Error>> {
         request_headers.insert("User-Agent", ANDROID_USER_AGENT.parse()?);
     }
 
-    let resp = CLIENT.execute(request).await?;
+    // googlevideo: try HTTP/3 (QUIC handles loss/HoL better), fall back to the
+    // HTTP/2 client on any h3 error. Gated by PROXY_HTTP3 (default off).
+    let resp = if *HTTP3_ON
+        && request
+            .url()
+            .host_str()
+            .map_or(false, |h| h.ends_with("googlevideo.com"))
+    {
+        match request.try_clone() {
+            Some(mut h3req) => {
+                *h3req.version_mut() = http::Version::HTTP_3;
+                match H3_CLIENT.execute(h3req).await {
+                    Ok(r) => r,
+                    Err(_) => CLIENT.execute(request).await?,
+                }
+            }
+            None => CLIENT.execute(request).await?,
+        }
+    } else {
+        CLIENT.execute(request).await?
+    };
 
     let mut response = HttpResponse::build(StatusCode::from_u16(resp.status().as_u16())?);
 
