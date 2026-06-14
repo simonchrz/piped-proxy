@@ -517,6 +517,7 @@ async fn index(req: HttpRequest) -> Result<HttpResponse, Box<dyn Error>> {
     // googlevideo: try HTTP/3 (QUIC handles loss/HoL better), fall back to the
     // HTTP/2 client on any h3 error. Gated by PROXY_HTTP3 (default off).
     let resp = if *HTTP3_ON
+        && *request.method() == Method::GET   // POST videoplayback (web) stays on h2
         && request
             .url()
             .host_str()
