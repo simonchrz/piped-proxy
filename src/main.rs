@@ -206,7 +206,19 @@ fn is_header_allowed(header: &str) -> bool {
             | "strict-transport-security"
             | "user-agent"
             | "range"
+            // hop-by-hop headers (RFC 7230 sec 6.1): a proxy MUST NOT forward
+            // these upstream. googlevideo speaks HTTP/2, where `Connection` (and
+            // friends) are illegal, so forwarding them yields 400 Bad Request.
+            // Java's HttpURLConnection always sends `Connection`, which is what
+            // broke the SynthHls SIDX fetch. (transfer-encoding was already here.)
             | "transfer-encoding"
+            | "connection"
+            | "keep-alive"
+            | "te"
+            | "trailer"
+            | "upgrade"
+            | "proxy-authorization"
+            | "proxy-authenticate"
             | "x-real-ip"
             | "origin"
             | "referer"
